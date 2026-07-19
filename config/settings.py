@@ -28,9 +28,9 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-def load_factors_config() -> dict:
-    """Reads the `factors:` section of config/config.yaml (falling back to
-    config.example.yaml if the user hasn't copied it yet) so factor weights
+def _load_config_section(section: str) -> dict:
+    """Reads a top-level section of config/config.yaml (falling back to
+    config.example.yaml if the user hasn't copied it yet), so run parameters
     are editable without touching code. Returns {} if neither file exists —
     callers should fall back to their own hardcoded defaults in that case.
     """
@@ -39,5 +39,25 @@ def load_factors_config() -> dict:
         if path.exists():
             with open(path) as f:
                 data = yaml.safe_load(f) or {}
-            return data.get("factors", {})
+            return data.get(section, {})
     return {}
+
+
+def load_factors_config() -> dict:
+    return _load_config_section("factors")
+
+
+def load_gemini_config() -> dict:
+    return _load_config_section("gemini")
+
+
+def load_portfolio_config() -> dict:
+    return _load_config_section("portfolio")
+
+
+def load_risk_config() -> dict:
+    return _load_config_section("risk")
+
+
+def load_simulation_config() -> dict:
+    return _load_config_section("simulation")

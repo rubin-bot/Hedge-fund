@@ -26,18 +26,40 @@ factors:
   crowding_threshold: 0.40
 
 portfolio:
+  mode: "mvo"  # "mvo" (cvxpy optimizer) or "conviction_tilt" (simpler score-weighted baseline)
   gross_exposure: 2.0
   net_exposure: 0.0
   max_position_weight: 0.03
   max_sector_weight: 0.20
   num_longs: 40
   num_shorts: 40
+  turnover_budget: 0.50
+  sector_neutrality_band: 0.02
+  beta_neutrality_band: 0.10
+  benchmark_ticker: "SPY"
+  covariance_shrinkage: 0.20
 
 risk:
   max_portfolio_volatility: 0.15
   max_drawdown_alert: 0.10
+  circuit_breaker_daily_loss_threshold: 0.025
+  circuit_breaker_drawdown_threshold: 0.08
+  correlation_threshold: 0.85
+  specific_risk_target_pct: 0.80
+  specific_risk_tolerance: 0.10
 
 simulation:
   starting_cash_usd: 10_000_000
   slippage_bps: 5
   commission_bps: 1
+  impact_coefficient_bps: 10.0  # extra bps of slippage per 1% of ADV participation
+  adv_window_days: 20
+
+# gemini-flash-latest free tier as of 2026-07 is roughly 15 requests/minute,
+# 1500 requests/day — these drift over time, check Google AI Studio's
+# rate-limit view for your project if analysis runs start 429ing a lot.
+gemini:
+  model: "gemini-flash-latest"
+  requests_per_minute: 15
+  requests_per_day: 1500
+  max_output_tokens: 4096

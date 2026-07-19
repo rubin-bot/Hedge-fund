@@ -132,6 +132,58 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_data_date TEXT,
     PRIMARY KEY (source, entity_key)
 );
+
+-- Caches every Gemini analysis result so a full backfill never re-analyzes
+-- the same filing/transcript/insider-cluster twice. One shared table for all
+-- four ai_analysis/ analyzers (rather than four near-identical tables) since
+-- they all cache the same shape of thing; cache_key's meaning depends on
+-- `analyzer` (accession_number, "acc_vs_priorAcc", a transaction-set content
+-- hash, or a call date). prompt_version lets a prompt rewrite be cache-busted
+-- deliberately without a schema change.
+CREATE TABLE IF NOT EXISTS ai_analysis_cache (
+    analyzer TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    cache_key TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    PRIMARY KEY (analyzer, ticker, cache_key)
+);
+
+-- One row per simulated fill, in the same shape a real broker execution log
+-- would use: what you intended, what you actually got, and the cost of the
+-- difference.
+CREATE TABLE IF NOT EXISTS paper_trades (
+    trade_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    order_date TEXT NOT NULL,
+    fill_date TEXT NOT NULL,
+    shares REAL NOT NULL,
+    intended_price REAL NOT NULL,
+    fill_price REAL NOT NULL,
+    slippage_bps REAL NOT NULL,
+    commission_usd REAL NOT NULL,
+    realized_pnl REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- Portfolio state snapshot after each rebalance/mark-to-market -- the
+-- SQLite-backed replacement for an in-memory history list, keyed per
+-- simulation run so repeated/concurrent runs don't mix.
+CREATE TABLE IF NOT EXISTS paper_portfolio_snapshots (
+    run_id TEXT NOT NULL,
+    as_of_date TEXT NOT NULL,
+    cash REAL NOT NULL,
+    market_value REAL NOT NULL,
+    total_equity REAL NOT NULL,
+    realized_pnl_cumulative REAL NOT NULL,
+    unrealized_pnl REAL NOT NULL,
+    circuit_breaker_tripped INTEGER NOT NULL,
+    positions_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, as_of_date)
+);
 """
 
 

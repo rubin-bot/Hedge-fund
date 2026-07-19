@@ -99,6 +99,26 @@ class SECEdgarClient:
             return []
         return sorted(filing_root.glob("*/primary-document.html"))
 
+    def fetch_filing_text(self, accession_number: str, primary_doc_url: str) -> Path:
+        """Downloads and caches a *specific* filing's primary document by
+        accession number. download_filing() above only fetches the latest N
+        filings for a ticker and can't target an arbitrary accession number —
+        this is what ai_analysis/filing_sections.py uses to get text for a
+        filing already indexed in the sec_filings table.
+        """
+        dest = self.download_dir / "filings_text" / accession_number / "primary-document.html"
+        if dest.exists():
+            return dest  # already cached to disk — don't re-download unchanged filings
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        response = requests.get(primary_doc_url, headers={"User-Agent": self.user_agent}, timeout=30)
+        response.raise_for_status()
+        # SEC filings rarely declare a charset in their Content-Type header, so requests
+        # falls back to ISO-8859-1 per RFC default and mangles smart quotes/em-dashes that
+        # are actually UTF-8 — sniff the real encoding instead of trusting response.encoding.
+        response.encoding = response.apparent_encoding
+        dest.write_text(response.text, encoding="utf-8")
+        return dest
+
     # --- Form 4 insider transactions ---
 
     def get_form4_transactions(self, cik: str, ticker: str, include_history: bool = False) -> list[dict]:
