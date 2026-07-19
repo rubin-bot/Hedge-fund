@@ -45,6 +45,20 @@ class YFinanceClient(MarketDataClient):
         combined["date"] = pd.to_datetime(combined["date"]).dt.strftime("%Y-%m-%d")
         return combined[["ticker", "date", "open", "high", "low", "close", "volume"]]
 
+    def get_financial_statements(self, ticker: str) -> dict[str, pd.DataFrame]:
+        """Free, multi-period (annual) statements — the fallback fundamentals
+        source when no FMP key is configured. Each DataFrame is transposed to
+        period-rows so callers can iterate fiscal years directly.
+        """
+        info = yf.Ticker(ticker)
+        return {
+            "balance_sheet": info.balance_sheet.T,
+            "income_statement": info.financials.T,
+            "cash_flow": info.cashflow.T,
+            "market_cap": info.info.get("marketCap"),
+            "shares_outstanding": info.info.get("sharesOutstanding"),
+        }
+
     def get_fundamentals(self, tickers: list[str]) -> pd.DataFrame:
         rows = []
         for ticker in tickers:

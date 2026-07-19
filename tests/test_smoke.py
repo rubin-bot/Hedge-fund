@@ -11,6 +11,7 @@ MODULES = [
     "data.ingestion.base",
     "data.ingestion.yfinance_client",
     "data.ingestion.fmp_client",
+    "data.ingestion.fundamentals_normalizer",
     "data.ingestion.sec_edgar_client",
     "data.ingestion.quiverquant_client",
     "data.ingestion.fred_client",
@@ -19,8 +20,19 @@ MODULES = [
     "data.ingestion.congressional.base",
     "data.ingestion.congressional.house_clerk",
     "data.ingestion.congressional.senate_efd",
-    "factors.definitions",
+    "factors.data_loader",
     "factors.scoring",
+    "factors.crowding",
+    "factors.momentum",
+    "factors.value",
+    "factors.quality",
+    "factors.growth",
+    "factors.estimate_revisions",
+    "factors.insider_activity",
+    "factors.institutional_flow",
+    "factors.congressional",
+    "factors.macro_regime",
+    "factors.engine",
     "ai_analysis.gemini_client",
     "ai_analysis.filing_analysis",
     "ai_analysis.transcript_analysis",
@@ -47,5 +59,5 @@ def test_composite_score(sample_prices: pd.DataFrame):
     from factors.scoring import composite_score
 
     factor_scores = {"momentum": sample_prices.iloc[-1] / sample_prices.iloc[0] - 1}
-    result = composite_score(factor_scores, weights={"momentum": 1.0})
+    result, _diagnostics = composite_score(factor_scores, weights={"momentum": 1.0})
     assert set(result.index) == set(sample_prices.columns)

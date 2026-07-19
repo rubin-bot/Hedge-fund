@@ -8,6 +8,23 @@ universe:
 rebalance:
   frequency: "monthly"
 
+# Mirrors factors/engine.py's DEFAULT_WEIGHTS/OPTIONAL_FACTORS — not read by
+# the engine automatically (pass weights=... to ScoringEngine explicitly),
+# this is a reference/edit point for anyone tuning the blend by hand.
+factors:
+  weights:
+    momentum: 0.15
+    value: 0.15
+    quality: 0.15
+    growth: 0.15
+    estimate_revisions: 0.10
+    insider_activity: 0.10
+    institutional_flow: 0.10
+    congressional: 0.10
+  optional_factors: ["congressional", "estimate_revisions", "institutional_flow", "insider_activity"]
+  min_coverage: 0.20
+  crowding_threshold: 0.40
+
 portfolio:
   gross_exposure: 2.0
   net_exposure: 0.0

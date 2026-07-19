@@ -12,6 +12,7 @@ from data.ingestion.congressional.base import SourceStructureError
 from data.ingestion.finra_short_interest import get_short_interest, recent_settlement_dates
 from data.ingestion.fmp_client import FMPClient
 from data.ingestion.fred_client import SERIES_BDI_PROXY, SERIES_DXY_PROXY, SERIES_PPI, FREDClient
+from data.ingestion.fundamentals_normalizer import normalize_fmp_period, normalize_yfinance_period
 from data.ingestion.sec_edgar_client import SECEdgarClient, parse_13f_holdings
 from data.ingestion.yfinance_client import YFinanceClient
 from data.universe import get_normalized_name_to_ticker, get_sp500_tickers, get_ticker_to_cik, sync_sp500_universe
@@ -61,47 +62,81 @@ def backfill_prices(tickers: list[str], years: int) -> None:
             print(f"[backfill] prices: {i + len(chunk)}/{len(tickers)}")
 
 
-def backfill_fundamentals(tickers: list[str]) -> None:
-    if not settings.fmp_api_key:
-        warn("FMP_API_KEY not set — skipping fundamentals backfill")
+def _store_normalized_fundamentals(conn, ticker: str, records: list[dict], fetched_at: str) -> None:
+    rows = [
+        (ticker, "normalized_annual", record["fiscal_date"], record["fiscal_date"], json.dumps(record), fetched_at)
+        for record in records
+        if record.get("fiscal_date")
+    ]
+    if not rows:
         return
-    client = FMPClient()
-    print(f"[backfill] fundamentals: {len(tickers)} tickers")
+    conn.executemany(
+        """
+        INSERT INTO fundamentals (ticker, statement_type, period, fiscal_date, payload_json, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (ticker, statement_type, period) DO UPDATE SET
+            fiscal_date=excluded.fiscal_date, payload_json=excluded.payload_json, fetched_at=excluded.fetched_at
+        """,
+        rows,
+    )
+
+
+def _fundamentals_from_fmp(client: FMPClient, ticker: str) -> list[dict]:
+    income = client.get_income_statement(ticker, period="annual", limit=10)
+    balance = client.get_balance_sheet(ticker, period="annual", limit=10)
+    ratios = client.get_ratios(ticker, period="annual", limit=10)
+    if income.empty:
+        return []
+
+    balance_by_date = {row["date"]: row for row in balance.to_dict("records")} if not balance.empty else {}
+    ratios_by_date = {row["date"]: row for row in ratios.to_dict("records")} if not ratios.empty else {}
+
+    return [
+        normalize_fmp_period(income_row, balance_by_date.get(income_row.get("date")), ratios_by_date.get(income_row.get("date")))
+        for income_row in income.to_dict("records")
+    ]
+
+
+def _fundamentals_from_yfinance(client: YFinanceClient, ticker: str) -> list[dict]:
+    statements = client.get_financial_statements(ticker)
+    balance, income, cash_flow = statements["balance_sheet"], statements["income_statement"], statements["cash_flow"]
+    if balance.empty:
+        return []
+
+    records = []
+    for fiscal_ts in balance.index:
+        fiscal_date = fiscal_ts.strftime("%Y-%m-%d")
+        balance_row = balance.loc[fiscal_ts]
+        income_row = income.loc[fiscal_ts] if fiscal_ts in income.index else None
+        cash_flow_row = cash_flow.loc[fiscal_ts] if fiscal_ts in cash_flow.index else None
+        records.append(
+            normalize_yfinance_period(fiscal_date, balance_row, income_row, cash_flow_row, statements["market_cap"])
+        )
+    return records
+
+
+def backfill_fundamentals(tickers: list[str]) -> None:
+    fmp_client = FMPClient() if settings.fmp_api_key else None
+    yf_client = YFinanceClient()
+    if fmp_client:
+        print(f"[backfill] fundamentals: {len(tickers)} tickers (FMP)")
+    else:
+        print(f"[backfill] fundamentals: {len(tickers)} tickers (yfinance free statements — no FMP_API_KEY set)")
 
     with connection() as conn:
         for n, ticker in enumerate(tickers, 1):
             try:
-                income = client.get_income_statement(ticker, period="annual", limit=10)
-                ratios = client.get_ratios(ticker, period="annual", limit=10)
+                if fmp_client:
+                    records = _fundamentals_from_fmp(fmp_client, ticker)
+                else:
+                    records = _fundamentals_from_yfinance(yf_client, ticker)
             except Exception as exc:
                 warn(f"fundamentals for {ticker} failed: {exc}")
                 continue
 
             fetched_at = now_iso()
-            for statement_type, df in (("income_statement", income), ("ratios", ratios)):
-                if df.empty:
-                    continue
-                rows = [
-                    (
-                        ticker,
-                        statement_type,
-                        str(row.get("period", "")) + str(row.get("fiscalYear", row.get("date", ""))),
-                        row.get("date"),
-                        json.dumps(row, default=str),
-                        fetched_at,
-                    )
-                    for row in df.to_dict("records")
-                ]
-                conn.executemany(
-                    """
-                    INSERT INTO fundamentals (ticker, statement_type, period, fiscal_date, payload_json, fetched_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (ticker, statement_type, period) DO UPDATE SET
-                        fiscal_date=excluded.fiscal_date, payload_json=excluded.payload_json, fetched_at=excluded.fetched_at
-                    """,
-                    rows,
-                )
-            set_sync_state(conn, "fmp_fundamentals", ticker, date.today().isoformat(), fetched_at)
+            _store_normalized_fundamentals(conn, ticker, records, fetched_at)
+            set_sync_state(conn, "fundamentals", ticker, date.today().isoformat(), fetched_at)
             if n % 25 == 0:
                 print(f"[backfill] fundamentals: {n}/{len(tickers)}")
 

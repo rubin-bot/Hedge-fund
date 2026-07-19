@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -25,3 +26,18 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def load_factors_config() -> dict:
+    """Reads the `factors:` section of config/config.yaml (falling back to
+    config.example.yaml if the user hasn't copied it yet) so factor weights
+    are editable without touching code. Returns {} if neither file exists —
+    callers should fall back to their own hardcoded defaults in that case.
+    """
+    for filename in ("config.yaml", "config.example.yaml"):
+        path = PROJECT_ROOT / "config" / filename
+        if path.exists():
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+            return data.get("factors", {})
+    return {}

@@ -3,7 +3,15 @@ import time
 from datetime import date, datetime, timedelta, timezone
 
 from config.settings import settings
-from data.backfill import _insert_congressional_trades, backfill_13f, now_iso, warn
+from data.backfill import (
+    _fundamentals_from_fmp,
+    _fundamentals_from_yfinance,
+    _insert_congressional_trades,
+    _store_normalized_fundamentals,
+    backfill_13f,
+    now_iso,
+    warn,
+)
 from data.db import connection, get_sync_state, init_db, set_sync_state
 from data.ingestion.analyst_estimates import get_analyst_estimates
 from data.ingestion.congressional import house_clerk
@@ -53,56 +61,37 @@ def sync_prices(tickers: list[str]) -> None:
 
 
 def sync_fundamentals(tickers: list[str]) -> None:
-    if not settings.fmp_api_key:
-        warn("FMP_API_KEY not set — skipping fundamentals sync")
-        return
-    client = FMPClient()
     cutoff = date.today() - timedelta(days=FUNDAMENTALS_REFRESH_DAYS)
 
     with connection() as conn:
         due = [
             t
             for t in tickers
-            if (last := get_sync_state(conn, "fmp_fundamentals", t)) is None
+            if (last := get_sync_state(conn, "fundamentals", t)) is None
             or datetime.fromisoformat(last).date() < cutoff
         ]
     if not due:
         print("[daily_sync] fundamentals: nothing due for refresh")
         return
-    print(f"[daily_sync] fundamentals: {len(due)}/{len(tickers)} tickers due for refresh")
 
-    import json
+    fmp_client = FMPClient() if settings.fmp_api_key else None
+    yf_client = YFinanceClient()
+    source = "FMP" if fmp_client else "yfinance free statements"
+    print(f"[daily_sync] fundamentals: {len(due)}/{len(tickers)} tickers due for refresh ({source})")
 
     with connection() as conn:
         for ticker in due:
             try:
-                income = client.get_income_statement(ticker, period="quarter", limit=2)
-                ratios = client.get_ratios(ticker, period="quarter", limit=2)
+                if fmp_client:
+                    records = _fundamentals_from_fmp(fmp_client, ticker)
+                else:
+                    records = _fundamentals_from_yfinance(yf_client, ticker)
             except Exception as exc:
                 warn(f"fundamentals for {ticker} failed: {exc}")
                 continue
             fetched_at = now_iso()
-            for statement_type, df in (("income_statement", income), ("ratios", ratios)):
-                if df.empty:
-                    continue
-                rows = [
-                    (
-                        ticker, statement_type,
-                        str(row.get("period", "")) + str(row.get("fiscalYear", row.get("date", ""))),
-                        row.get("date"), json.dumps(row, default=str), fetched_at,
-                    )
-                    for row in df.to_dict("records")
-                ]
-                conn.executemany(
-                    """
-                    INSERT INTO fundamentals (ticker, statement_type, period, fiscal_date, payload_json, fetched_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (ticker, statement_type, period) DO UPDATE SET
-                        fiscal_date=excluded.fiscal_date, payload_json=excluded.payload_json, fetched_at=excluded.fetched_at
-                    """,
-                    rows,
-                )
-            set_sync_state(conn, "fmp_fundamentals", ticker, date.today().isoformat(), fetched_at)
+            _store_normalized_fundamentals(conn, ticker, records, fetched_at)
+            set_sync_state(conn, "fundamentals", ticker, date.today().isoformat(), fetched_at)
 
 
 def sync_sec_filings_and_form4(tickers: list[str], ticker_to_cik: dict[str, str]) -> None:
