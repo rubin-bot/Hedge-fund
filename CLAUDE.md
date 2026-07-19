@@ -95,6 +95,46 @@ construction, risk management, paper-trading simulation, and a dashboard.
   factor the scorer already dropped for thin coverage silently corrupts
   the complete-case sample.
 
+## Portfolio, risk, and simulation conventions (`portfolio/`, `risk/`, `simulation/`)
+- `portfolio/construction.py`'s `construct_portfolio()` is the single
+  entry point for turning composite scores into target weights, picked
+  between two modes via `portfolio.mode` in config (`"mvo"` — cvxpy
+  mean-variance optimizer, `portfolio/optimization.py` — or
+  `"conviction_tilt"` — a simpler score-weighted baseline). Both modes
+  select the same candidate set (`select_long_short_candidates`) so the
+  difference under test is the weighting scheme, not the universe — that's
+  what makes conviction-tilt a fair baseline to compare MVO against, not a
+  different strategy entirely.
+- `risk/gate.py`'s `evaluate_portfolio()` is the **only** thing in this
+  codebase with veto authority — it can return weights that differ from
+  what `construct_portfolio()` proposed. Everything else in `risk/`
+  (`risk_management.py`'s position/sector/beta/turnover checks,
+  `correlation_monitor.py`, `decomposition.py`) is flag/report-only and
+  never changes the output; only `circuit_breaker.py`'s
+  `check_circuit_breaker`/`apply_circuit_breaker` gate. Don't hand
+  `construct_portfolio()`'s output straight to `simulation.paper_trading`
+  or the dashboard without routing it through `evaluate_portfolio()` first
+  — that's the whole point of it being independent.
+- Circuit-breaker logic (the "halt new position entry, still allow
+  de-risking" rule) lives in exactly one place, `risk/circuit_breaker.py`,
+  and is reused verbatim everywhere it's needed (`risk/gate.py`,
+  `simulation/paper_trading.py`) rather than reimplemented — if the halt
+  rule ever needs to change, it only needs to change there.
+- Covariance/beta estimation goes through `portfolio/risk_models.py`
+  (`estimate_covariance_matrix`'s fixed-intensity diagonal shrinkage,
+  `estimate_beta`'s Cov/Var regression) wherever it's needed (MVO,
+  `risk/decomposition.py`'s factor loadings) — one estimator, not
+  reimplemented per caller.
+- Every module here follows the same config precedence as `factors/engine.py`:
+  explicit constructor/function arg > `config/config.yaml`'s section (via
+  `load_portfolio_config()`/`load_risk_config()`/`load_simulation_config()`
+  in `config/settings.py`) > hardcoded default.
+- When verifying against real data in a dev session where a backfill or
+  other writer might already hold `data/processed/research.db`'s lock,
+  don't write to it directly — copy it via SQLite's online backup API
+  (`sqlite3.connect(src).backup(dest_conn)`, safe against a live WAL-mode
+  DB unlike a raw file copy) into an isolated temp DB and verify there.
+
 ## Conventions
 - Cache expensive API and LLM calls (especially Gemini filing analysis) so
   nothing is fetched or analyzed twice.
