@@ -1,0 +1,14 @@
+anthropic
+pandas
+numpy
+scipy
+statsmodels
+cvxpy
+requests
+python-dotenv
+pydantic
+pydantic-settings
+pyyaml
+streamlit
+plotly
+pytest

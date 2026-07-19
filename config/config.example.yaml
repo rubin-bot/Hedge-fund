@@ -1,0 +1,26 @@
+# Copy to config.yaml and adjust. Non-secret run parameters only — API keys live in .env.
+
+universe:
+  index: "SP500"
+  min_market_cap_usd: 2_000_000_000
+  min_avg_dollar_volume_usd: 5_000_000
+
+rebalance:
+  frequency: "monthly"
+
+portfolio:
+  gross_exposure: 2.0
+  net_exposure: 0.0
+  max_position_weight: 0.03
+  max_sector_weight: 0.20
+  num_longs: 40
+  num_shorts: 40
+
+risk:
+  max_portfolio_volatility: 0.15
+  max_drawdown_alert: 0.10
+
+simulation:
+  starting_cash_usd: 10_000_000
+  slippage_bps: 5
+  commission_bps: 1
