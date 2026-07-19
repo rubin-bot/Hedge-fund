@@ -17,6 +17,25 @@ data sourcing, Gemini for all LLM calls (see `CLAUDE.md`).
 **Everything through paper trading is now built and tested (78 passing
 tests).** The dashboard is the one remaining unbuilt piece.
 
+## Where this session left off / what to do next
+
+- **Repo is on GitHub**: `https://github.com/rubin-bot/Hedge-fund` (public,
+  account `rubin-bot`). Local `master` tracks `origin/master`; working tree
+  was clean and fully pushed at session end, commit `9da484c`.
+- **Next build target: the dashboard** (`dashboard/app.py`, currently a
+  Streamlit skeleton). It should read from `construct_portfolio()` →
+  `risk.gate.evaluate_portfolio()` → `PaperTradingEngine`'s SQLite tables
+  (`paper_trades`, `paper_portfolio_snapshots`) — see the "How to run the
+  pipeline right now" code block below for the exact call chain and why the
+  risk gate step can't be skipped. Just say "build the dashboard" and this
+  doc plus `CLAUDE.md` should be enough context to start.
+- **Before that (or the dashboard will have nothing real to show)**: two
+  known gaps need clearing — a stuck background process possibly still
+  holding the live DB's write lock, and SPY missing from that DB. Both are
+  detailed in "Known gaps / TODO" below (items 1–2); check those first in a
+  new session, since terminal/process state doesn't persist across sessions
+  and needs re-verifying fresh.
+
 ## Location
 
 Git repo root: `C:\Users\RUBIN\Desktop\Projects_Cursor\Cludi\Hedge fund\`.
@@ -156,28 +175,26 @@ incremental updates after that.
 
 ## Known gaps / TODO (in priority order)
 
-1. **`dashboard/` is the only unbuilt piece.** `app.py` is a Streamlit
-   skeleton not wired to real data. It should read from
-   `construct_portfolio()` → `risk.gate.evaluate_portfolio()` →
-   `PaperTradingEngine`'s SQLite tables (`paper_trades`,
-   `paper_portfolio_snapshots`) — don't have it call `construct_portfolio()`
-   directly and skip the risk gate.
-2. **A background backfill process from an earlier session appears
-   stuck.** PID 24656 (`python.exe`, started 2026-07-19 19:17, command
-   backfills the 33-ticker diversified universe + Form4/13F/congressional/
-   short-interest/analyst-estimates) has accumulated only ~0.015s of CPU
-   time despite running for hours — `sec_filings`, `sec_form4_transactions`,
-   `sec_13f_holdings`, `congressional_trades`, and `fred_series` are all
-   still empty in the live DB (confirmed via direct query) while
-   `short_interest`/`analyst_estimates` partially landed. This smells like
-   a blocking network call with no timeout — Senate eFD's known Akamai
-   block (see `CLAUDE.md`) is the top suspect. **Check whether that process
-   is still alive before starting new backfill work**, and consider it safe
-   to kill (`taskkill /PID 24656 /F` or your process manager of choice) if
-   confirmed stuck — nothing in this repo depends on it finishing.
-   Consider adding a `timeout=` to whichever `requests` call is hanging so
-   this can't recur silently.
-3. **SPY (the benchmark ticker) is not in the live `research.db`.** Every
+1. **A background backfill process from an earlier session appeared
+   stuck as of session end.** PID 24656 (`python.exe`, started
+   2026-07-19 19:17, command backfills the 33-ticker diversified universe +
+   Form4/13F/congressional/short-interest/analyst-estimates) had
+   accumulated only ~0.015s of CPU time despite running for hours —
+   `sec_filings`, `sec_form4_transactions`, `sec_13f_holdings`,
+   `congressional_trades`, and `fred_series` were all still empty in the
+   live DB (confirmed via direct query, re-checked right before this
+   session ended with zero further progress) while `short_interest`
+   (2 rows)/`analyst_estimates` (146 rows) partially landed and then
+   stalled too. This smells like a blocking network call with no timeout —
+   Senate eFD's known Akamai block (see `CLAUDE.md`) is the top suspect.
+   **The terminal this ran in was being closed at session end, so this
+   process may or may not still exist by the time you read this — check
+   fresh** (`Get-Process python` on Windows) rather than assuming either
+   way. If it's gone, just re-run the backfill for whatever's still empty;
+   if it's still there and still stuck, it's safe to kill (nothing in this
+   repo depends on it finishing) and consider adding a `timeout=` to
+   whichever `requests` call is hanging so this can't recur silently.
+2. **SPY (the benchmark ticker) is not in the live `research.db`.** Every
    MVO/beta-neutral/stress-test verification this session was run against
    an isolated temp-DB copy (via SQLite's online backup API, to avoid
    fighting the stuck process above for the write lock) with SPY backfilled
@@ -185,30 +202,30 @@ incremental updates after that.
    `python -c "from data.backfill import backfill_prices; backfill_prices(['SPY'], years=2)"`
    once the DB is free before relying on beta-neutral MVO or stress-test
    replay against real (non-test) data.
-4. **New tables (`ai_analysis_cache`, `paper_trades`,
+3. **New tables (`ai_analysis_cache`, `paper_trades`,
    `paper_portfolio_snapshots`) don't exist in the live DB yet** — they're
    created lazily via `CREATE TABLE IF NOT EXISTS` the first time
    `ai_analysis.cache`/`PaperTradingEngine` actually run against it; only
-   exercised against isolated temp DBs so far this session.
-5. No `FMP_API_KEY` or `FRED_API_KEY` configured — fundamentals correctly
+   exercised against isolated temp DBs so far.
+4. No `FMP_API_KEY` or `FRED_API_KEY` configured — fundamentals correctly
    fall back to yfinance's free statements (thoroughly tested), but
    FRED-dependent factors/macro regime return empty/`unknown` until a key
    is added.
-6. `senate_efd.py` is built against the documented official flow but
+5. `senate_efd.py` is built against the documented official flow but
    returns a `SenateAccessBlockedError` from the dev network (Akamai bot
-   protection) — likely the cause of gap #2 above if `backfill_congressional`
+   protection) — likely the cause of gap #1 above if `backfill_congressional`
    is where that stuck process is actually blocked.
-7. 13F holdings are ticker-matched by normalized company name, not exact
+6. 13F holdings are ticker-matched by normalized company name, not exact
    CUSIP (no free CUSIP↔ticker mapping exists) — documented in
    `sec_edgar_client.py`.
-8. No free full earnings-call-transcript API exists (Finnhub/API Ninjas
+7. No free full earnings-call-transcript API exists (Finnhub/API Ninjas
    gate it to paid plans, FMP markets it as a premium dataset) — by design,
    `TranscriptSentimentAnalyzer.analyze()` takes `transcript_text` directly
    rather than fetching it; sourcing transcripts is left to the caller.
 
 ## Test status
 
-78 tests passing as of commit `de1e1fe` (`python -m pytest tests/ -v`): 3
+78 tests passing as of commit `9da484c` (`python -m pytest tests/ -v`): 3
 smoke, 9 factor-engine, 13 ai_analysis, 19 portfolio, 20 risk, 14 simulation.
 All synthetic-data unit tests plus live verification against real
 SEC/price/Gemini data during each build (never committed to the repo, disk
@@ -217,6 +234,7 @@ caches under `data/raw/` are gitignored).
 ## Git history
 
 ```
+9da484c Update CLAUDE.md and PROJECT_SUMMARY.md for the portfolio/risk/simulation build
 de1e1fe Build AI analysis, portfolio construction, risk management, and paper trading layers
 49a0427 Add PROJECT_SUMMARY.md as a bridge doc for new sessions
 528ef4a Move CLAUDE.md into the project root and update conventions
