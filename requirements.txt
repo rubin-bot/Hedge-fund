@@ -1,6 +1,9 @@
 google-genai
 yfinance
 sec-edgar-downloader
+lxml
+beautifulsoup4
+pdfplumber
 pandas
 numpy
 scipy

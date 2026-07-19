@@ -6,7 +6,9 @@ from google.genai.errors import ClientError
 
 from config.settings import settings
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+# Alias that always resolves to Google's current recommended flash model,
+# rather than a pinned version that can get deprecated for new API keys.
+DEFAULT_MODEL = "gemini-flash-latest"
 MAX_RETRIES = 5
 INITIAL_BACKOFF_SECONDS = 2.0
 

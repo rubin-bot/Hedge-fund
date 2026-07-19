@@ -13,6 +13,38 @@ class YFinanceClient(MarketDataClient):
             return data.xs("Close", axis=1, level=1)
         return data[["Close"]].rename(columns={"Close": tickers[0]})
 
+    def get_ohlcv(self, tickers: list[str], start: date, end: date) -> pd.DataFrame:
+        """Long-format OHLCV (ticker, date, open, high, low, close, volume) —
+        the shape the prices_daily SQLite table expects, as opposed to
+        get_prices()'s wide Close-only DataFrame used by the factor layer.
+        """
+        data = yf.download(tickers, start=start, end=end, auto_adjust=True, group_by="ticker")
+        columns = ["Open", "High", "Low", "Close", "Volume"]
+
+        frames = []
+        if isinstance(data.columns, pd.MultiIndex):
+            for ticker in tickers:
+                if ticker not in data.columns.get_level_values(0):
+                    continue
+                sub = data[ticker][columns].dropna(how="all")
+                sub = sub.reset_index().rename(columns={"Date": "date"})
+                sub["ticker"] = ticker
+                frames.append(sub)
+        else:
+            sub = data[columns].dropna(how="all").reset_index().rename(columns={"Date": "date"})
+            sub["ticker"] = tickers[0]
+            frames.append(sub)
+
+        if not frames:
+            return pd.DataFrame(columns=["ticker", "date", "open", "high", "low", "close", "volume"])
+
+        combined = pd.concat(frames, ignore_index=True)
+        combined = combined.rename(
+            columns={"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}
+        )
+        combined["date"] = pd.to_datetime(combined["date"]).dt.strftime("%Y-%m-%d")
+        return combined[["ticker", "date", "open", "high", "low", "close", "volume"]]
+
     def get_fundamentals(self, tickers: list[str]) -> pd.DataFrame:
         rows = []
         for ticker in tickers:
