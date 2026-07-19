@@ -2,15 +2,7 @@ import argparse
 from datetime import date, timedelta
 
 from config.settings import settings
-from data.ingestion.base import MarketDataClient
-from data.ingestion.fmp_client import FMPClient
-from data.ingestion.polygon_client import PolygonClient
-
-
-def get_market_data_client() -> MarketDataClient:
-    if settings.data_provider == "polygon":
-        return PolygonClient()
-    return FMPClient()
+from data.ingestion.yfinance_client import YFinanceClient
 
 
 def main() -> None:
@@ -19,7 +11,7 @@ def main() -> None:
     parser.add_argument("--lookback-days", type=int, default=365)
     args = parser.parse_args()
 
-    client = get_market_data_client()
+    client = YFinanceClient()
     end = date.today()
     start = end - timedelta(days=args.lookback_days)
 

@@ -16,10 +16,12 @@ def mean_variance_optimize(
     mu = expected_returns.values
     sigma = covariance.values
 
+    # Classic Markowitz objective: maximize expected return net of a variance
+    # penalty (quad_form = w'*sigma*w, the portfolio variance).
     objective = cp.Maximize(mu @ w - risk_aversion * cp.quad_form(w, sigma))
     constraints = [
-        cp.sum(cp.abs(w)) <= gross_exposure,
-        cp.sum(w) == net_exposure,
+        cp.sum(cp.abs(w)) <= gross_exposure,  # gross = sum of |long| + |short| weights
+        cp.sum(w) == net_exposure,  # net = longs minus shorts, e.g. 0 for market-neutral
         w <= max_position_weight,
         w >= -max_position_weight,
     ]

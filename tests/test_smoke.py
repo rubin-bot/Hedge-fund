@@ -5,13 +5,13 @@ import pandas as pd
 MODULES = [
     "config.settings",
     "data.ingestion.base",
-    "data.ingestion.fmp_client",
-    "data.ingestion.polygon_client",
+    "data.ingestion.yfinance_client",
+    "data.ingestion.sec_edgar_client",
     "data.ingestion.quiverquant_client",
     "data.ingestion.fred_client",
     "factors.definitions",
     "factors.scoring",
-    "ai_analysis.claude_client",
+    "ai_analysis.gemini_client",
     "ai_analysis.filing_analysis",
     "ai_analysis.transcript_analysis",
     "portfolio.construction",
@@ -30,7 +30,7 @@ def test_all_modules_import():
 def test_settings_loads():
     from config.settings import settings
 
-    assert settings.data_provider in ("fmp", "polygon")
+    assert settings.google_api_key is not None
 
 
 def test_composite_score(sample_prices: pd.DataFrame):

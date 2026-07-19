@@ -11,4 +11,6 @@ def check_sector_limits(weights: pd.Series, sector_map: pd.Series, max_sector_we
 
 
 def historical_var(returns: pd.Series, confidence: float = 0.95) -> float:
+    # Historical VaR: the loss at the (1 - confidence) percentile of realized
+    # returns, e.g. 95% VaR is the loss not expected to be exceeded 95% of days.
     return -returns.quantile(1 - confidence)

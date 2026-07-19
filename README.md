@@ -1,10 +1,11 @@
 # Long-Short Equity Research System
 
 A quantitative long-short equity research platform that combines traditional
-factor investing (value, momentum, quality, growth) with Claude-based
+factor investing (value, momentum, quality, growth) with Gemini-based
 qualitative analysis of SEC filings and earnings call transcripts, wrapped in
 a portfolio construction, risk management, and paper-trading pipeline with a
-Streamlit dashboard.
+Streamlit dashboard. Data sourcing defaults to free tiers wherever possible
+(see `CLAUDE.md`).
 
 ## Architecture
 
@@ -16,23 +17,26 @@ data → factors → ai_analysis → portfolio → risk → simulation → dashb
 
 1. **`data/`** — Ingestion scripts pull raw prices, fundamentals, and
    alternative data into `data/raw/`, then write cleaned/derived tables to
-   `data/processed/`. Market data comes from either FMP or Polygon, selected
-   at runtime via the `DATA_PROVIDER` setting (`config/settings.py`), so
-   either provider's API key works without code changes. `QuiverQuant`
-   supplies alternative data (e.g. congressional/insider trading) and `FRED`
-   supplies macroeconomic series.
+   `data/processed/`. Prices and fundamentals come from `yfinance`
+   (`yfinance_client.py`, free, no key), filing documents from SEC EDGAR
+   (`sec_edgar_client.py`, free, no key), and macro series from `FRED`
+   (`fred_client.py`, free tier). `QuiverQuant` (`quiverquant_client.py`)
+   supplies alternative data (e.g. congressional/insider trading) — this is
+   the one paid dependency, kept because there's no free equivalent for that
+   signal.
 
 2. **`factors/`** — The scoring engine. `definitions.py` computes individual
    factors (value, momentum, quality, growth) from processed data;
    `scoring.py` normalizes and combines them into a single composite score
    per ticker used to rank the investable universe.
 
-3. **`ai_analysis/`** — Claude-based qualitative overlay. `claude_client.py`
-   wraps the Anthropic SDK; `filing_analysis.py` and `transcript_analysis.py`
-   prompt Claude to extract risk factors, red flags, guidance changes, and
-   management tone shifts from 10-K/10-Q filings and earnings call
-   transcripts, producing a qualitative signal that complements the
-   quantitative factor scores.
+3. **`ai_analysis/`** — Gemini-based qualitative overlay. `gemini_client.py`
+   wraps the `google-genai` SDK (with retry/backoff for free-tier rate
+   limits); `filing_analysis.py` and `transcript_analysis.py` prompt Gemini
+   to extract risk factors, red flags, guidance changes, and management tone
+   shifts from 10-K/10-Q filings (pulled via `sec_edgar_client.py`) and
+   earnings call transcripts, producing a qualitative signal that
+   complements the quantitative factor scores.
 
 4. **`portfolio/`** — Turns ranked/scored tickers into a tradable portfolio.
    `construction.py` selects long and short candidates and applies simple
@@ -55,11 +59,14 @@ data → factors → ai_analysis → portfolio → risk → simulation → dashb
    PnL, reading from the outputs of the stages above.
 
 `config/` centralizes settings: `settings.py` (a `pydantic-settings`
-`BaseSettings` model) loads API keys and the `DATA_PROVIDER` toggle from
-`.env`, and `config.example.yaml` holds non-secret run parameters (universe
-definition, rebalance frequency, exposure/risk limits). `tests/` contains
-smoke tests that import every package and a couple of unit tests for the
-scoring logic.
+`BaseSettings` model) loads API keys from `.env`, and `config.example.yaml`
+holds non-secret run parameters (universe definition, rebalance frequency,
+exposure/risk limits). `tests/` contains smoke tests that import every
+package and a couple of unit tests for the scoring logic.
+
+See `CLAUDE.md` for the project's working conventions (free-tier-first data
+sourcing, Gemini-only for LLM calls, caching expensive calls, commenting
+non-obvious financial calculations).
 
 ## Setup
 
@@ -67,12 +74,9 @@ scoring logic.
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 pip install -r requirements.txt
-copy .env.example .env        # then fill in your API keys
+copy .env.example .env        # then fill in GOOGLE_API_KEY, QUIVERQUANT_API_KEY, FRED_API_KEY
 copy config\config.example.yaml config\config.yaml   # optional, for local overrides
 ```
-
-Set `DATA_PROVIDER` in `.env` to `fmp` or `polygon` depending on which
-market data key you have configured.
 
 ## Running
 
@@ -84,7 +88,6 @@ streamlit run dashboard/app.py
 
 ## Status
 
-This is a scaffold: module interfaces and file layout are in place, but
-provider API calls, the factor/optimization math, and the paper-trading
-fill logic are stubbed with `TODO`s / `NotImplementedError` pending
-implementation.
+This is a scaffold: module interfaces and file layout are in place, but the
+factor/optimization math and the paper-trading fill logic are stubbed with
+`TODO`s / `NotImplementedError` pending implementation.

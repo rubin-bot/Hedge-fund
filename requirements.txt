@@ -1,4 +1,6 @@
-anthropic
+google-genai
+yfinance
+sec-edgar-downloader
 pandas
 numpy
 scipy
