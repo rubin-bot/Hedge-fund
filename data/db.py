@@ -172,6 +172,11 @@ CREATE TABLE IF NOT EXISTS paper_trades (
 -- Portfolio state snapshot after each rebalance/mark-to-market -- the
 -- SQLite-backed replacement for an in-memory history list, keyed per
 -- simulation run so repeated/concurrent runs don't mix.
+--
+-- NOTE: this table (and PaperTradingEngine, which writes it) is
+-- superseded by the virtual-ledger tables below for the API's daily
+-- decision-and-track loop -- left in place, unmodified, since nothing
+-- else in the codebase depends on removing it.
 CREATE TABLE IF NOT EXISTS paper_portfolio_snapshots (
     run_id TEXT NOT NULL,
     as_of_date TEXT NOT NULL,
@@ -183,6 +188,70 @@ CREATE TABLE IF NOT EXISTS paper_portfolio_snapshots (
     circuit_breaker_tripped INTEGER NOT NULL,
     positions_json TEXT NOT NULL,
     PRIMARY KEY (run_id, as_of_date)
+);
+
+-- --- Virtual cash ledger: the daily decision-and-track loop ---------------
+--
+-- Append-only. total_deposited is always SUM(amount) over this table --
+-- never stored as a separate running total -- so the balance can never
+-- drift from the deposit history. See simulation/virtual_ledger.py.
+CREATE TABLE IF NOT EXISTS cash_deposits (
+    deposit_id TEXT PRIMARY KEY,
+    amount REAL NOT NULL,
+    deposited_at TEXT NOT NULL
+);
+
+-- One row per user-executed position (a manually chosen candidate, sized
+-- in dollars, not an automated rebalance). side carries direction; shares
+-- is always positive. Both long and short tie up `cost_basis` dollars of
+-- free cash symmetrically -- shares = cost_basis / entry_price, no margin
+-- modeling. Lifecycle: INSERT status='open' on execute; UPDATE to
+-- status='closed' (+exit_price/exit_date/realized_pnl/closed_at) on
+-- close. Rows are never deleted except by a full account reset.
+CREATE TABLE IF NOT EXISTS positions (
+    position_id TEXT PRIMARY KEY,
+    ticker TEXT NOT NULL,
+    side TEXT NOT NULL,                  -- 'long' | 'short'
+    shares REAL NOT NULL,
+    entry_price REAL NOT NULL,           -- latest available close as of entry_date, not a live quote
+    entry_date TEXT NOT NULL,
+    cost_basis REAL NOT NULL,            -- cash allocated by the user; shares * entry_price
+    composite_score_at_entry REAL,       -- snapshot of the score that justified the pick
+    status TEXT NOT NULL DEFAULT 'open', -- 'open' | 'closed'
+    exit_price REAL,
+    exit_date TEXT,
+    realized_pnl REAL,
+    created_at TEXT NOT NULL,
+    closed_at TEXT
+);
+
+-- One row per OPEN position per end-of-day reconciliation run. Upserted
+-- on (position_id, mark_date) so re-running the same day updates rather
+-- than duplicates. Gives the per-position holding-period return vs. SPY.
+CREATE TABLE IF NOT EXISTS position_daily_marks (
+    position_id TEXT NOT NULL,
+    mark_date TEXT NOT NULL,
+    price REAL NOT NULL,
+    unrealized_pnl REAL NOT NULL,
+    position_return_pct REAL NOT NULL,
+    benchmark_return_pct REAL NOT NULL,  -- SPY return over [entry_date, mark_date]
+    excess_return_pct REAL NOT NULL,
+    PRIMARY KEY (position_id, mark_date)
+);
+
+-- One row per end-of-day reconciliation run -- the account-level equity
+-- curve. IMMUTABLE once written for a past date: closing a position
+-- after today's snapshot already ran does NOT rewrite today's row, it
+-- shows up in tomorrow's -- this is what lets the circuit breaker treat
+-- this as a trustworthy returns series (see virtual_ledger.py).
+CREATE TABLE IF NOT EXISTS account_daily_snapshots (
+    snapshot_date TEXT PRIMARY KEY,
+    free_cash REAL NOT NULL,
+    cash_tied_up REAL NOT NULL,
+    unrealized_pnl REAL NOT NULL,
+    realized_pnl_cumulative REAL NOT NULL,
+    total_account_value REAL NOT NULL,   -- free_cash + cash_tied_up + unrealized_pnl
+    created_at TEXT NOT NULL
 );
 """
 

@@ -121,8 +121,20 @@ class SECEdgarClient:
 
     # --- Form 4 insider transactions ---
 
-    def get_form4_transactions(self, cik: str, ticker: str, include_history: bool = False) -> list[dict]:
+    def get_form4_transactions(
+        self, cik: str, ticker: str, include_history: bool = False, limit: int | None = None
+    ) -> list[dict]:
+        """limit caps how many of the most-recent-first filings get fetched
+        -- each one is a separate live HTTP request (SEC_REQUEST_DELAY_SECONDS
+        apart), so an active filer's full "recent" window (SEC's submissions
+        API can return hundreds of Form 4s there) can take a long time with
+        no cap. None (the CLI backfill's default) preserves the existing
+        unbounded behavior; api/routers/candidates.py's on-demand per-ticker
+        lookup passes a small limit to keep interactive latency bounded.
+        """
         filings = self.list_filings(cik, ["4", "4/A"], include_history=include_history)
+        if limit is not None:
+            filings = filings[:limit]
         transactions = []
         for filing in filings:
             time.sleep(SEC_REQUEST_DELAY_SECONDS)

@@ -4,37 +4,92 @@ Bridge document for picking up this project cold. For behavioral
 conventions/policy (data source rules, scraper conventions, factor/portfolio/
 risk conventions), read `CLAUDE.md` too — that's the authoritative, actively
 maintained policy file; this document is a point-in-time state snapshot
-(as of 2026-07-19) and can go stale, so verify against the actual code
+(as of 2026-07-20) and can go stale, so verify against the actual code
 before relying on specifics here.
 
 ## What this is
 
 A Python quantitative long-short equity research system: data ingestion →
-factor scoring → AI filing/transcript analysis → portfolio construction →
-risk management → paper-trading simulation → dashboard. Free-tier-first
-data sourcing, Gemini for all LLM calls (see `CLAUDE.md`).
+factor scoring → AI filing/transcript analysis → a virtual cash ledger
+with a daily decide-and-track loop → a FastAPI + Next.js reporting layer.
+Free-tier-first data sourcing, Gemini for all LLM calls (see `CLAUDE.md`).
 
-**Everything through paper trading is now built and tested (78 passing
-tests).** The dashboard is the one remaining unbuilt piece.
+**The full pipeline is built and tested end to end (95 passing Python
+tests + a clean Next.js typecheck/lint/build).** The old Streamlit
+`dashboard/app.py` skeleton and the old weight-based `PaperTradingEngine`
+(`simulation/paper_trading.py`) are both superseded — see below — and can
+be deleted whenever someone gets around to it; nothing depends on them.
 
 ## Where this session left off / what to do next
 
 - **Repo is on GitHub**: `https://github.com/rubin-bot/Hedge-fund` (public,
-  account `rubin-bot`). Local `master` tracks `origin/master`; working tree
-  was clean and fully pushed at session end, commit `9da484c`.
-- **Next build target: the dashboard** (`dashboard/app.py`, currently a
-  Streamlit skeleton). It should read from `construct_portfolio()` →
-  `risk.gate.evaluate_portfolio()` → `PaperTradingEngine`'s SQLite tables
-  (`paper_trades`, `paper_portfolio_snapshots`) — see the "How to run the
-  pipeline right now" code block below for the exact call chain and why the
-  risk gate step can't be skipped. Just say "build the dashboard" and this
-  doc plus `CLAUDE.md` should be enough context to start.
-- **Before that (or the dashboard will have nothing real to show)**: two
-  known gaps need clearing — a stuck background process possibly still
-  holding the live DB's write lock, and SPY missing from that DB. Both are
-  detailed in "Known gaps / TODO" below (items 1–2); check those first in a
-  new session, since terminal/process state doesn't persist across sessions
-  and needs re-verifying fresh.
+  account `rubin-bot`). Verify local `master` vs `origin/master` fresh each
+  session — this doc doesn't track push state turn to turn.
+- **This session reworked paper trading into a manual daily
+  decide-and-track loop**, replacing the automated MVO-rebalance engine
+  from the prior session. The interaction model is now: the app surfaces
+  ranked candidates from the model each day, you read the AI Analysis for
+  a pick, you choose which to execute and how much virtual cash to put
+  behind each, and the system tracks that specific position (open → held →
+  closed) against a virtual cash ledger, reconciling daily against real
+  closing prices and SPY.
+  - `simulation/virtual_ledger.py` — the core of the new loop:
+    `deposit()`, `get_balance()` (always DERIVED from `cash_deposits` +
+    `positions`, never a stored running total), `execute_candidate()`
+    (guards against a double-click overspend race via `BEGIN IMMEDIATE`),
+    `close_position()`, `run_end_of_day()` (per-open-position mark vs.
+    SPY + one account-level snapshot, both upsert-safe for re-running the
+    same date), `circuit_breaker_status()` (reuses
+    `risk/circuit_breaker.py` verbatim, built from investment P&L only —
+    NOT `total_account_value`, so a deposit can never look like a fake
+    "return" and corrupt the drawdown check), `reset()`. Four new tables
+    in `data/db.py`'s `SCHEMA`: `cash_deposits`, `positions`,
+    `position_daily_marks`, `account_daily_snapshots`.
+  - `api/routers/account.py` (deposit/balance/reset/run-end-of-day/
+    overview), `api/routers/candidates.py` (today's ranked longs/shorts —
+    bypasses MVO entirely, just `ScoringEngine` + `select_long_short_candidates`
+    — plus the on-demand, cached "AI Analysis" panel per candidate),
+    `api/routers/positions.py` (execute/close/list — the new Simulated
+    Execution Log source) are all new. `api/routers/risk.py` and
+    `api/routers/performance.py` were reworked (via the new
+    `api/ledger_service.py`) to analyze the user's actual open positions
+    instead of a hypothetical MVO target book. The old
+    `/api/portfolio/current` and `/api/execution/trades` routes are gone
+    — their roles are now split across `candidates`/`positions`/`account`.
+  - **AI Analysis panel**: reuses `FilingStructureAnalyzer`,
+    `RiskFactorAnalyzer`, `InsiderTransactionAnalyzer` completely
+    unmodified, populating their `sec_filings`/`sec_form4_transactions`
+    dependencies on-demand per ticker on first expand
+    (`data/backfill.py`'s `backfill_sec_filings`/`backfill_form4`, both
+    now take `include_history`/`limit` params added this session — the
+    CLI backfill's full-history default is far too slow for an
+    interactive click, e.g. it never finished for one ticker in 4+
+    minutes before the fix; `include_history=False` +
+    `FORM4_FETCH_LIMIT=20` in `candidates.py` bounds first-expand latency
+    to under a minute). `TranscriptSentimentAnalyzer` is never called —
+    always reported "unavailable" (no free transcript source exists, a
+    documented gap from before this session).
+  - `web/`'s Portfolio view (`/`) was rebuilt around the new loop: cash
+    balance + breakdown, Deposit Funds control, today's candidates with
+    an AI Analysis expander and an Execute (cash-amount) control per
+    card, open positions with live P&L and a Close button, plus Run End
+    of Day / Reset Account buttons. Execution Log (`/execution`) now
+    lists positions (entry → exit) instead of a flat fill log. Risk
+    Controls (`/risk`) now analyzes real open positions. Factor Research
+    (`/factors`) and the AI Commentary view (`/ai`) are otherwise
+    unchanged from last session, just re-pointed at the new data sources
+    where relevant.
+  - `web/src/lib/types.ts`/`api.ts` were fully rewritten to match — no
+    leftover references to the old portfolio/execution shapes.
+- **The DB was fully wiped and re-verified empty this session**: run
+  `curl -X POST http://localhost:8000/api/account/reset` (or
+  `simulation.virtual_ledger.reset()` directly) any time you want to
+  return to a clean-slate account. This also clears the OLD
+  `paper_trades`/`paper_portfolio_snapshots` tables (from the prior
+  session's now-superseded seeded data) since they're fully replaced by
+  the tables above — it does **not** touch `ai_analysis_cache`,
+  `sec_filings`, or `sec_form4_transactions`, which are reusable market/
+  analysis data, not trading state.
 
 ## Location
 
@@ -92,8 +147,10 @@ Hedge fund/
 │   ├── filing_structure_analyzer.py    # analyzer 1: 10-K/10-Q structural anomalies
 │   ├── risk_factor_analyzer.py          # analyzer 2: Item 1A changes between consecutive filings
 │   ├── insider_transaction_analyzer.py   # analyzer 3: cluster-buy vs. routine option-exercise-sale
-│   └── transcript_sentiment_analyzer.py   # analyzer 4: earnings-call sentiment — takes transcript_text
-│                                            # directly, no ingestion (no free full-transcript API exists)
+│   ├── transcript_sentiment_analyzer.py   # analyzer 4: earnings-call sentiment — takes transcript_text
+│   │                                        # directly, no ingestion (no free full-transcript API exists)
+│   ├── weekly_commentary.py               # analyzer 5: weekly trade-log/risk/performance commentary (api/routers/ai.py)
+│   └── lp_letter.py                        # analyzer 6: LP-style letter over the same weekly data
 ├── portfolio/                   # FULLY BUILT
 │   ├── construction.py             # construct_portfolio() — mode toggle (portfolio.mode: "mvo" |
 │   │                                 # "conviction_tilt"), select_long_short_candidates, conviction_tilt_positions,
@@ -116,24 +173,64 @@ Hedge fund/
 │   │                                 # tickers without that much price history
 │   └── gate.py                         # evaluate_portfolio() — the ONLY veto authority in this codebase;
 │                                         # everything else above is flag-only
-├── simulation/                  # FULLY BUILT
-│   ├── paper_trading.py            # PaperTradingEngine — rebalance() sizes off decision-date close, fills
-│   │                                 # at next-session open, average-cost lot P&L (symmetric long/short,
-│   │                                 # flip-splitting), SQLite trade log + snapshots, wired to
-│   │                                 # risk/circuit_breaker.py via its own persisted equity history
-│   └── execution.py                  # estimate_slippage_bps (linear-in-ADV-participation), simulate_fill_price
-├── dashboard/app.py             # Streamlit skeleton, NOT wired to real data — NEXT BUILD TARGET
+├── simulation/
+│   ├── paper_trading.py            # OLD -- PaperTradingEngine, weight-based rebalancing. Superseded by
+│   │                                 # virtual_ledger.py for anything API-driven; untouched, unused by any route.
+│   ├── execution.py                  # estimate_slippage_bps (linear-in-ADV-participation), simulate_fill_price
+│   │                                   # -- also only used by the old engine now, not the virtual ledger.
+│   └── virtual_ledger.py               # NEW -- the manual decide-and-track loop: deposit/get_balance (always
+│                                         # DERIVED, never stored)/execute_candidate (BEGIN IMMEDIATE overspend
+│                                         # guard)/close_position/run_end_of_day (upsert-safe)/
+│                                         # circuit_breaker_status (built from investment P&L, not
+│                                         # total_account_value)/reset
+├── api/                          # FULLY BUILT — FastAPI backend
+│   ├── main.py                     # FastAPI app + CORS (localhost:3000, GET+POST) + router registration + init_db()
+│   ├── engine_service.py            # the MODEL's view: compute_pipeline() runs ScoringEngine only (no MVO, no
+│   │                                  # risk gate -- those don't fit a manual candidate-review flow), feeds
+│   │                                  # factors.py and candidates.py
+│   ├── ledger_service.py             # the LEDGER's view: risk/performance analysis over the user's actual open
+│   │                                  # positions (reuses risk/decomposition.py, correlation_monitor.py,
+│   │                                  # stress_testing.py, risk_management.py directly -- not through risk/gate.py,
+│   │                                  # which is proposed-vs-previous-weights shaped and doesn't fit a real-holdings
+│   │                                  # monitor); feeds risk.py and performance.py
+│   ├── cache.py                      # generic in-process TTLCache (15 min default) for engine_service's pipeline
+│   ├── schemas.py                     # Pydantic response models, one per endpoint
+│   └── routers/                        # account.py, candidates.py, positions.py (all NEW this session),
+│                                         # factors.py, risk.py (reworked), performance.py (reworked), ai.py
+├── dashboard/app.py             # OLD Streamlit skeleton — superseded by api/ + web/, safe to delete
+├── web/                          # FULLY BUILT — Next.js 16 (App Router/TS/Tailwind v4) frontend, see src/app/
+│   └── src/
+│       ├── app/                    # page.tsx = Portfolio (route "/", the daily loop), factors/, risk/,
+│       │                            # execution/ (now lists positions, not fills), ai/
+│       ├── components/               # app-shell.tsx (nav), portfolio-dashboard.tsx (the Portfolio view's
+│       │                              # client-side state owner), candidate-card.tsx (Execute + AI Analysis
+│       │                              # expander), ai-analysis-panel.tsx, position-card.tsx (Close), deposit-form.tsx,
+│       │                              # ai-insight-card.tsx, crowding-chart.tsx, ui/ (stat-tile, sparkline,
+│       │                              # factor-bar, badge, icons)
+│       └── lib/                      # api.ts (fetch wrappers, GET+POST), types.ts (hand-mirrors api/schemas.py —
+│                                       # keep in sync by hand, no shared codegen), format.ts (currency/pct
+│                                       # formatting + normalizeLlmText() for Gemini's occasional literal "\n" text)
 └── tests/
     ├── test_smoke.py             # imports every module + basic sanity checks
     ├── test_factors.py            # synthetic-data unit tests for the scoring engine
     ├── test_ai_analysis.py         # rate limiter, cache, filing-section parsing, all 4 analyzers (mocked Gemini)
     ├── test_portfolio.py            # covariance/beta, MVO constraints, conviction-tilt, mode toggle
     ├── test_risk.py                  # circuit breaker, decomposition, correlation monitor, stress replay, gate
-    └── test_simulation.py             # slippage model, lot accounting (every branch), rebalance end-to-end,
-                                         # the circuit-breaker-halts-trading test
+    ├── test_simulation.py             # OLD engine: slippage model, lot accounting, rebalance end-to-end
+    ├── test_api.py                     # engine_service._num() casting
+    └── test_virtual_ledger.py           # deposit/execute/close cycle, the overspend-race guard, EOD idempotency,
+                                           # the circuit-breaker deposit-contamination fix — synthetic data with
+                                           # load_close_on_or_before monkeypatched (see its fixture docstring for why)
 ```
 
 ## How to run the pipeline right now
+
+The block below demonstrates the underlying engine's automated path
+(scoring → MVO → risk gate → the OLD `PaperTradingEngine`) — it's still
+valid code and nothing stops you calling it directly, but **the live app
+(`api/` + `web/`) no longer uses this path**. The app's daily loop is
+manual/candidate-driven (`simulation/virtual_ledger.py`) — see "How to run
+the reporting layer" below for that.
 
 ```python
 from factors.engine import ScoringEngine
@@ -173,63 +270,76 @@ To populate the database first: `python -m data.backfill --tickers AAPL MSFT ...
 (or no `--tickers` for the full S&P 500 — slow). `python -m data.daily_sync` for
 incremental updates after that.
 
+## How to run the reporting layer right now
+
+```bash
+# terminal 1 — backend (needs GOOGLE_API_KEY in .env for the two /api/ai/* routes)
+uvicorn api.main:app --reload --port 8000
+
+# terminal 2 — frontend (reads web/.env.local for NEXT_PUBLIC_API_BASE_URL)
+cd web && npm run dev
+```
+Then open `http://localhost:3000`. First thing to do on a clean checkout:
+deposit virtual cash (`POST /api/account/deposit {"amount": 100000}` or
+the Deposit Funds control in the UI) — everything starts at $0 by design.
+The candidate universe is whatever's both an S&P 500 constituent and
+present in `prices_daily` (currently the 33-ticker diversified set + SPY
+— see `api/engine_service.py`'s `default_universe()`); `/api/candidates`
+takes `?num_longs=&num_shorts=` to change how many are surfaced (default
+15 each), not a ticker override.
+
 ## Known gaps / TODO (in priority order)
 
-1. **A background backfill process from an earlier session appeared
-   stuck as of session end.** PID 24656 (`python.exe`, started
-   2026-07-19 19:17, command backfills the 33-ticker diversified universe +
-   Form4/13F/congressional/short-interest/analyst-estimates) had
-   accumulated only ~0.015s of CPU time despite running for hours —
-   `sec_filings`, `sec_form4_transactions`, `sec_13f_holdings`,
-   `congressional_trades`, and `fred_series` were all still empty in the
-   live DB (confirmed via direct query, re-checked right before this
-   session ended with zero further progress) while `short_interest`
-   (2 rows)/`analyst_estimates` (146 rows) partially landed and then
-   stalled too. This smells like a blocking network call with no timeout —
-   Senate eFD's known Akamai block (see `CLAUDE.md`) is the top suspect.
-   **The terminal this ran in was being closed at session end, so this
-   process may or may not still exist by the time you read this — check
-   fresh** (`Get-Process python` on Windows) rather than assuming either
-   way. If it's gone, just re-run the backfill for whatever's still empty;
-   if it's still there and still stuck, it's safe to kill (nothing in this
-   repo depends on it finishing) and consider adding a `timeout=` to
-   whichever `requests` call is hanging so this can't recur silently.
-2. **SPY (the benchmark ticker) is not in the live `research.db`.** Every
-   MVO/beta-neutral/stress-test verification this session was run against
-   an isolated temp-DB copy (via SQLite's online backup API, to avoid
-   fighting the stuck process above for the write lock) with SPY backfilled
-   *there* — the real DB still lacks it. Run
-   `python -c "from data.backfill import backfill_prices; backfill_prices(['SPY'], years=2)"`
-   once the DB is free before relying on beta-neutral MVO or stress-test
-   replay against real (non-test) data.
-3. **New tables (`ai_analysis_cache`, `paper_trades`,
-   `paper_portfolio_snapshots`) don't exist in the live DB yet** — they're
-   created lazily via `CREATE TABLE IF NOT EXISTS` the first time
-   `ai_analysis.cache`/`PaperTradingEngine` actually run against it; only
-   exercised against isolated temp DBs so far.
-4. No `FMP_API_KEY` or `FRED_API_KEY` configured — fundamentals correctly
+1. No `FMP_API_KEY` or `FRED_API_KEY` configured — fundamentals correctly
    fall back to yfinance's free statements (thoroughly tested), but
    FRED-dependent factors/macro regime return empty/`unknown` until a key
    is added.
-5. `senate_efd.py` is built against the documented official flow but
+2. `senate_efd.py` is built against the documented official flow but
    returns a `SenateAccessBlockedError` from the dev network (Akamai bot
-   protection) — likely the cause of gap #1 above if `backfill_congressional`
-   is where that stuck process is actually blocked.
-6. 13F holdings are ticker-matched by normalized company name, not exact
+   protection).
+3. 13F holdings are ticker-matched by normalized company name, not exact
    CUSIP (no free CUSIP↔ticker mapping exists) — documented in
    `sec_edgar_client.py`.
-7. No free full earnings-call-transcript API exists (Finnhub/API Ninjas
+4. No free full earnings-call-transcript API exists (Finnhub/API Ninjas
    gate it to paid plans, FMP markets it as a premium dataset) — by design,
    `TranscriptSentimentAnalyzer.analyze()` takes `transcript_text` directly
-   rather than fetching it; sourcing transcripts is left to the caller.
+   rather than fetching it; the AI Analysis panel always reports this
+   section unavailable, never fakes it.
+5. **The universe is only 33 tickers + SPY** — everything in `api/`/`web/`
+   was built and tested against that, not the full S&P 500 (which isn't
+   fully backfilled). `ScoringEngine.run()` alone (no MVO anymore — see
+   above) is fast even at 33 tickers; worth re-timing at 500 before
+   assuming the 15-minute cache TTL in `api/cache.py` is still right.
+6. **AI Analysis first-expand latency is bounded but not fast**: on the
+   first click for a given ticker, `candidates.py` does live SEC EDGAR
+   calls (filing list + up to `FORM4_FETCH_LIMIT=20` individual Form 4
+   fetches, ~0.15s apart each per SEC's fair-access policy) plus 1-2
+   Gemini calls — this session measured ~50s worst case for a
+   heavily-filed ticker (COP). Every expand after that is cache-fast
+   (<1s). If this needs to be snappier, the next lever is prefetching/
+   warming the cache for the day's candidate list server-side rather than
+   waiting for a user click.
+7. The performance endpoint's `beta`/`alpha`/`factor_contribution` fields
+   come back `null` until `account_daily_snapshots` has 60+ days of
+   history (`portfolio/risk_models.py`'s `estimate_beta()` won't estimate
+   off less than that, by design — see `api/ledger_service.py`'s
+   `get_performance()` docstring). Expected to be `null` on any fresh
+   account for a couple months, not a bug.
+8. `dashboard/app.py` (the old Streamlit skeleton) and
+   `simulation/paper_trading.py` (the old weight-based engine) are both
+   dead code now that `api/`/`web/`/`virtual_ledger.py` exist — nobody's
+   deleted them yet, kept around since nothing depends on removing them.
 
 ## Test status
 
-78 tests passing as of commit `9da484c` (`python -m pytest tests/ -v`): 3
-smoke, 9 factor-engine, 13 ai_analysis, 19 portfolio, 20 risk, 14 simulation.
-All synthetic-data unit tests plus live verification against real
-SEC/price/Gemini data during each build (never committed to the repo, disk
-caches under `data/raw/` are gitignored).
+95 tests passing (`python -m pytest tests/ -v`): 3 smoke, 9 factor-engine,
+13 ai_analysis, 19 portfolio, 20 risk, 14 simulation (old engine), 2 api,
+15 virtual_ledger (added this session) — plus a clean `web/` typecheck
+(`npx tsc --noEmit`), lint (`npm run lint`), and production build
+(`npm run build`), none of which show up in the Python count. All
+synthetic-data unit tests plus live verification against real SEC/price/
+Gemini data during each build (never committed to the repo, disk caches
+under `data/raw/` are gitignored).
 
 ## Git history
 

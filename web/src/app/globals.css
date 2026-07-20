@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens from the ui-ux-pro-max skill's "Financial Dashboard"
+ * product-type match (Dark Mode OLED style, Data-Dense Dashboard layout,
+ * "Dashboard Data" Fira Code/Fira Sans typography). Dark-only by design --
+ * the skill's own guidance for this style explicitly lists "Light mode
+ * default" as an anti-pattern for a data-dense financial terminal.
+ *
+ * long/short/gain/loss all reuse the same green/red pair so the same two
+ * colors always mean the same two things everywhere in the app. ai-accent
+ * (purple) is reserved ONLY for AI-generated content so it never gets
+ * mistaken for a gain/loss signal. warning (amber) is a third, distinct
+ * risk state between "OK" (green) and "HALTED" (red).
+ */
+:root {
+  --background: #020617;
+  --card: #0e1223;
+  --secondary: #1e293b;
+  --border: #334155;
+  --foreground: #f8fafc;
+  --muted-foreground: #94a3b8;
+
+  --long: #22c55e;
+  --short: #ef4444;
+  --ai-accent: #8b5cf6;
+  --warning: #f59e0b;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-card: var(--card);
+  --color-secondary: var(--secondary);
+  --color-border: var(--border);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-long: var(--long);
+  --color-short: var(--short);
+  --color-ai-accent: var(--ai-accent);
+  --color-warning: var(--warning);
+
+  --font-sans: var(--font-fira-sans);
+  --font-mono: var(--font-fira-code);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}

@@ -16,4 +16,6 @@ pydantic-settings
 pyyaml
 streamlit
 plotly
+fastapi
+uvicorn[standard]
 pytest

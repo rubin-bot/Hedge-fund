@@ -141,7 +141,13 @@ def backfill_fundamentals(tickers: list[str]) -> None:
                 print(f"[backfill] fundamentals: {n}/{len(tickers)}")
 
 
-def backfill_sec_filings(tickers: list[str], ticker_to_cik: dict[str, str]) -> None:
+def backfill_sec_filings(tickers: list[str], ticker_to_cik: dict[str, str], include_history: bool = True) -> None:
+    """include_history=True (the CLI backfill default) paginates through a
+    ticker's ENTIRE filing history, which is fine for an overnight batch
+    job but too slow for an interactive on-demand single-ticker lookup
+    (see api/routers/candidates.py, which passes include_history=False to
+    fetch just the latest 10-K/10-Q before running the AI Analysis panel).
+    """
     client = SECEdgarClient()
     print(f"[backfill] SEC 10-K/10-Q index: {len(tickers)} tickers")
 
@@ -151,7 +157,7 @@ def backfill_sec_filings(tickers: list[str], ticker_to_cik: dict[str, str]) -> N
             if not cik:
                 continue
             try:
-                filings = client.list_filings(cik, ["10-K", "10-Q"], include_history=True)
+                filings = client.list_filings(cik, ["10-K", "10-Q"], include_history=include_history)
             except Exception as exc:
                 warn(f"SEC filings for {ticker} failed: {exc}")
                 continue
@@ -185,7 +191,13 @@ def backfill_sec_filings(tickers: list[str], ticker_to_cik: dict[str, str]) -> N
                 print(f"[backfill] SEC filings: {n}/{len(tickers)}")
 
 
-def backfill_form4(tickers: list[str], ticker_to_cik: dict[str, str]) -> None:
+def backfill_form4(
+    tickers: list[str], ticker_to_cik: dict[str, str], include_history: bool = True, limit: int | None = None
+) -> None:
+    """See backfill_sec_filings's include_history docstring -- same
+    interactive-vs-batch tradeoff applies here. limit is passed straight
+    through to SECEdgarClient.get_form4_transactions -- see its docstring.
+    """
     client = SECEdgarClient()
     print(f"[backfill] Form 4 insider transactions: {len(tickers)} tickers")
 
@@ -195,7 +207,9 @@ def backfill_form4(tickers: list[str], ticker_to_cik: dict[str, str]) -> None:
             if not cik:
                 continue
             try:
-                transactions = client.get_form4_transactions(cik, ticker, include_history=True)
+                transactions = client.get_form4_transactions(
+                    cik, ticker, include_history=include_history, limit=limit
+                )
             except Exception as exc:
                 warn(f"Form 4 for {ticker} failed: {exc}")
                 continue
